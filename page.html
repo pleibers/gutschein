@@ -305,15 +305,24 @@
 
             @media (max-width: 700px) {
                 body {
+                    display: block;
+                    min-height: auto;
                     padding: 14px;
                 }
 
                 .stage {
                     width: 100%;
+                    max-width: 520px;
+                    margin: 0 auto;
                 }
 
                 .card {
                     aspect-ratio: 4 / 5;
+                }
+
+                .card-back {
+                    overflow-y: auto;
+                    -webkit-overflow-scrolling: touch;
                 }
 
                 .hint {
@@ -325,6 +334,7 @@
 
                 .back-content {
                     justify-content: flex-start;
+                    min-height: 100%;
                     padding-top: 36px;
                 }
 
