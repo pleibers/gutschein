@@ -63,9 +63,6 @@
                 position: relative;
                 width: 100%;
                 aspect-ratio: 3 / 2;
-                border: 0;
-                padding: 0;
-                background: none;
                 cursor: pointer;
                 transform-style: preserve-3d;
                 transition: transform 0.9s cubic-bezier(0.2, 0.75, 0.2, 1);
@@ -237,7 +234,7 @@
 
             .flip-note {
                 position: absolute;
-                right: clamp(18px, 4vw, 34px);
+                right: clamp(168px, 18vw, 252px);
                 bottom: clamp(18px, 4vw, 30px);
                 color: rgba(62, 42, 29, 0.68);
                 font-size: 0.88rem;
@@ -246,6 +243,47 @@
                 border-radius: 999px;
                 background: rgba(255, 248, 239, 0.46);
                 backdrop-filter: blur(6px);
+            }
+
+            .download-pdf {
+                position: absolute;
+                right: clamp(18px, 4vw, 34px);
+                bottom: clamp(18px, 4vw, 30px);
+                z-index: 2;
+                border: 0;
+                border-radius: 999px;
+                padding: 12px 18px;
+                background: rgba(80, 48, 29, 0.92);
+                color: #fff8f1;
+                font: inherit;
+                font-size: 0.92rem;
+                font-weight: 700;
+                letter-spacing: 0.03em;
+                cursor: pointer;
+                box-shadow: 0 12px 22px rgba(64, 41, 25, 0.24);
+                transition:
+                    transform 0.2s ease,
+                    box-shadow 0.2s ease,
+                    background-color 0.2s ease;
+            }
+
+            .download-pdf:hover,
+            .download-pdf:focus-visible {
+                background: rgba(99, 58, 35, 0.96);
+                transform: translateY(-1px);
+                box-shadow: 0 16px 28px rgba(64, 41, 25, 0.28);
+            }
+
+            .download-pdf:focus-visible {
+                outline: 3px solid rgba(201, 122, 75, 0.36);
+                outline-offset: 3px;
+            }
+
+            .download-pdf:disabled {
+                cursor: progress;
+                opacity: 0.72;
+                transform: none;
+                box-shadow: 0 12px 22px rgba(64, 41, 25, 0.16);
             }
 
             .back-content::after {
@@ -296,17 +334,24 @@
 
                 .flip-note {
                     position: static;
+                    margin-top: 0;
+                }
+
+                .download-pdf {
+                    position: static;
                     margin-top: auto;
+                    align-self: flex-start;
                 }
             }
         </style>
     </head>
     <body>
         <main class="stage">
-            <button
+            <div
                 class="card"
                 id="card"
-                type="button"
+                role="button"
+                tabindex="0"
                 aria-pressed="false"
                 aria-label="Gutschein umdrehen"
             >
@@ -333,17 +378,480 @@
                         <div class="flip-note">
                             Nochmal klicken zum Zurückdrehen
                         </div>
+                        <button
+                            class="download-pdf"
+                            id="download-pdf"
+                            type="button"
+                            aria-label="Gutschein als PDF herunterladen"
+                        >
+                            PDF laden
+                        </button>
                     </div>
                 </section>
-            </button>
+            </div>
         </main>
 
         <script>
             const card = document.getElementById("card");
+            const downloadButton = document.getElementById("download-pdf");
+            const frontFace = document.querySelector(".card-front");
+            const backFace = document.querySelector(".card-back");
+            const image = frontFace.querySelector("img");
 
-            card.addEventListener("click", () => {
+            const A4_WIDTH_PT = 595.28;
+            const A4_HEIGHT_PT = 841.89;
+            const PDF_MARGIN_PT = 36;
+            const PAGE_WIDTH_PT = A4_WIDTH_PT - PDF_MARGIN_PT * 2;
+            const PAGE_HEIGHT_PT = A4_HEIGHT_PT - PDF_MARGIN_PT * 2;
+            const PAGE_WIDTH_PX = 1400;
+            const PAGE_HEIGHT_PX = Math.round(
+                PAGE_WIDTH_PX * (PAGE_HEIGHT_PT / PAGE_WIDTH_PT),
+            );
+
+            const toggleCard = () => {
                 const isFlipped = card.classList.toggle("is-flipped");
                 card.setAttribute("aria-pressed", String(isFlipped));
+            };
+
+            card.addEventListener("click", (event) => {
+                if (event.target.closest(".download-pdf")) {
+                    return;
+                }
+
+                toggleCard();
+            });
+
+            card.addEventListener("keydown", (event) => {
+                if (event.target !== card) {
+                    return;
+                }
+
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    toggleCard();
+                }
+            });
+
+            const waitForImage = (img) =>
+                img.complete
+                    ? Promise.resolve()
+                    : new Promise((resolve, reject) => {
+                          img.addEventListener("load", resolve, { once: true });
+                          img.addEventListener(
+                              "error",
+                              () =>
+                                  reject(
+                                      new Error(
+                                          "Das Gutscheinbild konnte nicht geladen werden.",
+                                      ),
+                                  ),
+                              { once: true },
+                          );
+                      });
+
+            const wrapText = (context, text, maxWidth, lineHeight) => {
+                const words = text.split(/\s+/).filter(Boolean);
+                const lines = [];
+                let currentLine = "";
+
+                for (const word of words) {
+                    const candidate = currentLine
+                        ? `${currentLine} ${word}`
+                        : word;
+
+                    if (
+                        currentLine &&
+                        context.measureText(candidate).width > maxWidth
+                    ) {
+                        lines.push(currentLine);
+                        currentLine = word;
+                        continue;
+                    }
+
+                    currentLine = candidate;
+                }
+
+                if (currentLine) {
+                    lines.push(currentLine);
+                }
+
+                return lines.map((line, index) => ({
+                    text: line,
+                    y: index * lineHeight,
+                }));
+            };
+
+            const canvasToJpegData = (canvas) => {
+                const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+                const base64 = dataUrl.split(",")[1];
+                const binary = atob(base64);
+                const bytes = new Uint8Array(binary.length);
+
+                for (let index = 0; index < binary.length; index += 1) {
+                    bytes[index] = binary.charCodeAt(index);
+                }
+
+                return {
+                    bytes,
+                    length: bytes.length,
+                };
+            };
+
+            const createPdfBlob = (jpegPages) => {
+                const offsets = [0];
+                const parts = [];
+                const encoder = new TextEncoder();
+                let length = 0;
+
+                const appendText = (text) => {
+                    const bytes = encoder.encode(text);
+                    parts.push(bytes);
+                    length += bytes.length;
+                };
+
+                const appendBinary = (bytes) => {
+                    parts.push(bytes);
+                    length += bytes.length;
+                };
+
+                const addObject = (bodyParts) => {
+                    offsets.push(length);
+                    appendText(`${offsets.length - 1} 0 obj\n`);
+
+                    bodyParts.forEach((part) => {
+                        if (typeof part === "string") {
+                            appendText(part);
+                        } else {
+                            appendBinary(part);
+                        }
+                    });
+
+                    appendText("\nendobj\n");
+                };
+
+                appendText("%PDF-1.4\n");
+                addObject(["<< /Type /Catalog /Pages 2 0 R >>"]);
+
+                const pageReferences = jpegPages
+                    .map((_, index) => `${3 + index * 3} 0 R`)
+                    .join(" ");
+                addObject([
+                    `<< /Type /Pages /Count ${jpegPages.length} /Kids [ ${pageReferences} ] >>`,
+                ]);
+
+                jpegPages.forEach((jpegPage, index) => {
+                    const pageObjectId = 3 + index * 3;
+                    const contentObjectId = pageObjectId + 1;
+                    const imageObjectId = pageObjectId + 2;
+                    const contentStream = [
+                        "q",
+                        `${PAGE_WIDTH_PT} 0 0 ${PAGE_HEIGHT_PT} ${PDF_MARGIN_PT} ${PDF_MARGIN_PT} cm`,
+                        `/Im${index + 1} Do`,
+                        "Q",
+                    ].join("\n");
+
+                    addObject([
+                        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4_WIDTH_PT} ${A4_HEIGHT_PT}] /Resources << /XObject << /Im${index + 1} ${imageObjectId} 0 R >> >> /Contents ${contentObjectId} 0 R >>`,
+                    ]);
+                    addObject([
+                        `<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream`,
+                    ]);
+                    addObject([
+                        `<< /Type /XObject /Subtype /Image /Width ${jpegPage.width} /Height ${jpegPage.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegPage.length} >>\nstream\n`,
+                        jpegPage.binary,
+                        "\nendstream",
+                    ]);
+                });
+
+                const xrefOffset = length;
+                appendText(`xref\n0 ${offsets.length}\n`);
+                appendText("0000000000 65535 f \n");
+
+                offsets.slice(1).forEach((offset) => {
+                    appendText(`${String(offset).padStart(10, "0")} 00000 n \n`);
+                });
+
+                appendText(
+                    `trailer\n<< /Size ${offsets.length} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
+                );
+
+                return new Blob(parts, { type: "application/pdf" });
+            };
+
+            const renderFrontCanvas = async () => {
+                await waitForImage(image);
+
+                const canvas = document.createElement("canvas");
+                const context = canvas.getContext("2d");
+                canvas.width = PAGE_WIDTH_PX;
+                canvas.height = PAGE_HEIGHT_PX;
+
+                context.fillStyle = "#f7efe5";
+                context.fillRect(0, 0, canvas.width, canvas.height);
+
+                const sourceWidth = image.naturalWidth || canvas.width;
+                const sourceHeight = image.naturalHeight || canvas.height;
+                const sourceRatio = sourceWidth / sourceHeight;
+                const targetRatio = canvas.width / canvas.height;
+
+                let drawWidth = canvas.width;
+                let drawHeight = canvas.height;
+                let offsetX = 0;
+                let offsetY = 0;
+
+                if (sourceRatio > targetRatio) {
+                    drawHeight = canvas.height;
+                    drawWidth = drawHeight * sourceRatio;
+                    offsetX = (canvas.width - drawWidth) / 2;
+                } else {
+                    drawWidth = canvas.width;
+                    drawHeight = drawWidth / sourceRatio;
+                    offsetY = (canvas.height - drawHeight) / 2;
+                }
+
+                context.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+
+                const hintStyles = getComputedStyle(frontFace.querySelector(".hint"));
+                const hintX = 30;
+                const hintY = canvas.height - 86;
+                const hintWidth = 290;
+                const hintHeight = 54;
+                const radius = 16;
+
+                context.fillStyle = hintStyles.backgroundColor;
+                context.beginPath();
+                context.moveTo(hintX + radius, hintY);
+                context.arcTo(
+                    hintX + hintWidth,
+                    hintY,
+                    hintX + hintWidth,
+                    hintY + hintHeight,
+                    radius,
+                );
+                context.arcTo(
+                    hintX + hintWidth,
+                    hintY + hintHeight,
+                    hintX,
+                    hintY + hintHeight,
+                    radius,
+                );
+                context.arcTo(
+                    hintX,
+                    hintY + hintHeight,
+                    hintX,
+                    hintY,
+                    radius,
+                );
+                context.arcTo(hintX, hintY, hintX + hintWidth, hintY, radius);
+                context.closePath();
+                context.fill();
+
+                context.fillStyle = hintStyles.color;
+                context.font = "700 26px Georgia";
+                context.fillText(frontFace.querySelector(".hint").textContent, 54, hintY + 34);
+
+                return canvas;
+            };
+
+            const renderBackCanvas = () => {
+                const canvas = document.createElement("canvas");
+                const context = canvas.getContext("2d");
+                const styles = getComputedStyle(document.documentElement);
+
+                canvas.width = PAGE_WIDTH_PX;
+                canvas.height = PAGE_HEIGHT_PX;
+
+                const background = context.createLinearGradient(
+                    0,
+                    0,
+                    canvas.width,
+                    canvas.height,
+                );
+                background.addColorStop(0, "#f8f2e9");
+                background.addColorStop(0.54, "#f2e3ca");
+                background.addColorStop(1, "#edd8ba");
+                context.fillStyle = background;
+                context.fillRect(0, 0, canvas.width, canvas.height);
+
+                const washes = [
+                    {
+                        x: canvas.width * 0.18,
+                        y: canvas.height * 0.26,
+                        radius: canvas.width * 0.22,
+                        color: styles.getPropertyValue("--wash-red").trim(),
+                    },
+                    {
+                        x: canvas.width * 0.72,
+                        y: canvas.height * 0.22,
+                        radius: canvas.width * 0.24,
+                        color: styles.getPropertyValue("--wash-blue").trim(),
+                    },
+                    {
+                        x: canvas.width * 0.86,
+                        y: canvas.height * 0.64,
+                        radius: canvas.width * 0.26,
+                        color: styles.getPropertyValue("--wash-gold").trim(),
+                    },
+                    {
+                        x: canvas.width * 0.36,
+                        y: canvas.height * 0.86,
+                        radius: canvas.width * 0.22,
+                        color: styles.getPropertyValue("--wash-violet").trim(),
+                    },
+                ];
+
+                washes.forEach(({ x, y, radius, color }) => {
+                    const wash = context.createRadialGradient(
+                        x,
+                        y,
+                        0,
+                        x,
+                        y,
+                        radius,
+                    );
+                    wash.addColorStop(0, color);
+                    wash.addColorStop(1, "rgba(255,255,255,0)");
+                    context.fillStyle = wash;
+                    context.beginPath();
+                    context.arc(x, y, radius, 0, Math.PI * 2);
+                    context.fill();
+                });
+
+                context.strokeStyle = "rgba(134, 88, 53, 0.12)";
+                context.lineWidth = 2;
+                context.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
+
+                context.strokeStyle = styles.getPropertyValue("--line").trim();
+                context.lineWidth = 2;
+                context.strokeRect(26, 26, canvas.width - 52, canvas.height - 52);
+
+                const eyebrow = backFace.querySelector(".eyebrow");
+                const title = backFace.querySelector("h1");
+                const message = backFace.querySelector(".message");
+                const signature = backFace.querySelector(".signature");
+
+                const paddingX = 86;
+                const topY = 86;
+
+                context.fillStyle = "rgba(255, 250, 245, 0.62)";
+                const eyebrowWidth = 172;
+                const eyebrowHeight = 42;
+                const eyebrowRadius = eyebrowHeight / 2;
+                context.beginPath();
+                context.moveTo(paddingX + eyebrowRadius, topY);
+                context.arcTo(
+                    paddingX + eyebrowWidth,
+                    topY,
+                    paddingX + eyebrowWidth,
+                    topY + eyebrowHeight,
+                    eyebrowRadius,
+                );
+                context.arcTo(
+                    paddingX + eyebrowWidth,
+                    topY + eyebrowHeight,
+                    paddingX,
+                    topY + eyebrowHeight,
+                    eyebrowRadius,
+                );
+                context.arcTo(
+                    paddingX,
+                    topY + eyebrowHeight,
+                    paddingX,
+                    topY,
+                    eyebrowRadius,
+                );
+                context.arcTo(
+                    paddingX,
+                    topY,
+                    paddingX + eyebrowWidth,
+                    topY,
+                    eyebrowRadius,
+                );
+                context.closePath();
+                context.fill();
+
+                context.fillStyle = styles.getPropertyValue("--paper-accent").trim();
+                context.font = "700 20px Georgia";
+                context.fillText(eyebrow.textContent.trim().toUpperCase(), paddingX + 22, topY + 28);
+
+                context.fillStyle = styles.getPropertyValue("--paper-text").trim();
+                context.font = "700 88px Georgia";
+                context.fillText(title.textContent.trim(), paddingX, topY + 150);
+
+                context.strokeStyle = "rgba(199, 108, 62, 0.28)";
+                context.lineWidth = 6;
+                context.beginPath();
+                context.moveTo(paddingX, topY + 196);
+                context.lineTo(paddingX, topY + 430);
+                context.stroke();
+
+                context.fillStyle = styles.getPropertyValue("--paper-muted").trim();
+                context.font = "34px Georgia";
+                const messageLines = wrapText(
+                    context,
+                    message.textContent.trim(),
+                    canvas.width - paddingX * 2 - 30,
+                    48,
+                );
+
+                messageLines.forEach(({ text, y }) => {
+                    context.fillText(text, paddingX + 28, topY + 232 + y);
+                });
+
+                context.fillStyle = styles.getPropertyValue("--paper-text").trim();
+                context.font = "italic 40px Georgia";
+                context.fillText(signature.textContent.trim(), paddingX, canvas.height - 96);
+
+                return canvas;
+            };
+
+            const downloadPdf = async () => {
+                const originalLabel = downloadButton.textContent;
+
+                try {
+                    downloadButton.disabled = true;
+                    downloadButton.textContent = "PDF wird erstellt...";
+
+                    const [frontCanvas, backCanvas] = await Promise.all([
+                        renderFrontCanvas(),
+                        Promise.resolve(renderBackCanvas()),
+                    ]);
+
+                    const jpegPages = [frontCanvas, backCanvas].map((canvas) => {
+                        const jpeg = canvasToJpegData(canvas);
+                        return {
+                            width: canvas.width,
+                            height: canvas.height,
+                            length: jpeg.length,
+                            binary: jpeg.bytes,
+                        };
+                    });
+
+                    const pdfBlob = createPdfBlob(jpegPages);
+                    const downloadUrl = URL.createObjectURL(pdfBlob);
+                    const link = document.createElement("a");
+
+                    link.href = downloadUrl;
+                    link.download = "gutschein.pdf";
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    URL.revokeObjectURL(downloadUrl);
+                } catch (error) {
+                    window.alert(
+                        error instanceof Error
+                            ? error.message
+                            : "Das PDF konnte nicht erstellt werden.",
+                    );
+                } finally {
+                    downloadButton.disabled = false;
+                    downloadButton.textContent = originalLabel;
+                }
+            };
+
+            downloadButton.addEventListener("click", (event) => {
+                event.stopPropagation();
+                downloadPdf();
             });
         </script>
     </body>
